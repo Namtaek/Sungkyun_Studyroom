@@ -1,0 +1,131 @@
+---
+title: "Week 8 R Example"
+author: "Kwon Namtaek"
+date: '2021 2 2 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+패키지 불러오기
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+```
+
+## 로지스틱 회귀분석
+
+데이터 불러오기
+
+```{r}
+data <- read.table("isolation.txt", header = T) %>% dplyr::select(incidence, isolation)
+data %>% str()
+```
+
+선형회귀식과 비교를 해보자
+
+```{r}
+model_lpm <- glm(incidence ~ isolation, family = gaussian(link = "identity"), data)
+# glm(모형식, 분포(연결함수, data) 
+# 정규분포 = gaussian / 연결함수 = identity(항등함수)로 설정해준다!
+
+model_lm <- lm(incidence ~ isolation, data)
+
+model_lpm$coefficients
+model_lm$coefficients
+```
+
+이처럼, 선형확률 모형은 이항자료를 단순 회귀식에 적합한 것과 같다! 
+
+```{r}
+data %>% ggplot() +
+  geom_point(aes(x = isolation, y = incidence)) +
+  geom_line(aes(x = isolation, y = fitted(model_lpm)), color = "red", size = 1) +
+  labs(title = "LPM")
+```
+
+반대로 이제 제대로 로지스틱 회귀로 가보자
+
+```{r}
+model_logit <- glm(incidence ~ isolation, family = binomial(link = "logit"), data)
+# 이항분포 = binomial / 연결함수 = logit(로짓)으로 설정해준다!
+
+data %>% ggplot() +
+  geom_point(aes(x = isolation, y = incidence)) +
+  geom_line(aes(x = isolation, y = fitted(model_logit)), color = "red", size = 1) +
+  labs(title = "Logistic")
+```
+
+어떤식으로 피팅되는지 대충 감이 잡힐 것이다!
+
+이제 summary를 통해 회귀식을 확인하자.
+
+```{r}
+summary(model_logit)
+```
+
+## 다범주 로지스틱 회귀
+
+```{r}
+data <- fread("https://stats.idre.ucla.edu/stat/data/hsbdemo.csv") %>% 
+  dplyr::select(-id, -socst, -cid, -honors, -female, -awards, -schtyp, -ses, -read, - write, -science)
+# 꼭 파일 이름을 설정해 줄 필요없이 csv 파일이 있는 URL이 있으면 그걸 넣어도 된다.
+
+data %>% str()
+data %>% glimpse()
+# 데이터 확인
+```
+
+지금 범주 이름을 수정해주고, 다범주 로지스틱을 돌리기 전에 좀 편하게 해주려 한다.
+
+```{r}
+unique(data$prog)
+data$prog = data$prog %>% plyr::revalue(c( "vocation" = "sophomore", "general" = "junior", "academic" = "senior"))
+colnames(data) <- c("grade", "statistics")
+# 데이터 이름 바꾸는 연습 겸 해석하기 쉽게 바꿔주자!
+# Y: future(3 levels: 2학년, 3학년, 4학년) / X: statistics(통계점수)
+
+data$grade = data$grade %>%  as.factor() %>%  relevel(ref = "sophomore")
+# relevel(ref = '기준범주')를 통해 기준범주를 새로 설정할 수 있다.
+
+data %>% str()
+data %>% ggplot(aes(x=statistics, y=grade)) + geom_point() + coord_flip()
+```
+
+총 3개의 범주를 갖는데, 여기에 회귀식을 적합하려 한다.
+
+```{r}
+library(nnet)
+model_multinom <- multinom(grade ~ statistics, data = data)
+# multinom()은 명목형 다항자료를 다룰 수 있는 기준범주 로짓 모형을 만들어 주는 함수이다.
+summary(model_multinom)
+# 적합된 모형의 값들을 볼 수 있다!
+# 통계 점수가 한 단위 증가할 때, 2학년 대신 3학년일 로짓이 0.06배 증가함을 알 수 있다!
+```
+
+## 포아송 회귀모형
+
+```{r}
+library(lme4) # 데이터가 있는 패키지
+data(grouseticks)
+```
+
+불러온 데이터를 살펴보자.
+
+```{r}
+head(grouseticks)
+
+hist(grouseticks$TICKS,breaks=0:90)
+```
+
+0이 많고 누가봐도 정규분포 형태는 아닌 것을 확인할 수 있다. 이런 경우에 이제 포아송 회귀분석이 유용하다.
+
+```{r}
+fit = glm(TICKS ~ HEIGHT*YEAR, data = grouseticks, family=poisson)
+summary(fit)
+```
+

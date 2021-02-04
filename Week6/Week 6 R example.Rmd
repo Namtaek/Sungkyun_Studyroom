@@ -1,0 +1,220 @@
+---
+title: "Assumption"
+output: html_document
+---
+
+## 회귀분석의 가정
+
+회귀분석의 가정을 체크하는 데에는 R이 더 좋다. 일반적으로 Python 생태계는 회귀분석을 통계적으로 사용한다기보다, 머신러닝에 입문하기 위한 도구정도로 다뤄왔던 것 같다. 따라서 sklearn 같은 패키지에서 제공하는 방법은 다 7회차에 다룰 다중공선성의 해결과 관련있다. 회귀가정에 대한 예제를 찾는 것은 어렵고, 있더라도 불친절하고 불편하다. 회귀모델 피팅해주면 바로 잔차플롯 주는 R을 생각해보자...!
+
+```{r, message = F}
+library(data.table)
+library(tidyverse)
+```
+
+```{r}
+data = fread('2017-18_NBA_salary.csv')
+```
+
+```{r}
+data %>% dim
+data %>% glimpse
+```
+
+```{r}
+data %>% head()
+```
+
+결측치는 일단 제거한다. 실제로 데이터 분석하면 왜 제거하는지 이유가 분명해야한다.
+
+```{r}
+data <- data[complete.cases(data), ] # 결측치 제거
+data <- data[-c(223:224), ] #겹치는 선수 삭제
+data$Player <- NULL # player 열 삭제
+data$Tm <- NULL #팀의 효과는 관심없음, 팀의 순위도 아니고 그냥 팀...
+data$NBA_Country <- NULL
+data = data %>% select('Salary', 'NBA_DraftNumber', 'Age', 'MP', 'PER', `TS%`, `DRB%`, VORP, G, BPM)
+
+# 그냥 일단 범주형 변수는 다 빼고 진행했습니다!
+# 또한 제가 이전에 했던 결과상 적당히 변수 줄여서 진행했어요!
+dim(data) # 최종 481행 10열
+```
+
+#### 탐색적 자료분석
+
+```{r}
+library(ggplot2)
+ggplot(data, aes(x = 1, y = Salary)) + 
+  geom_boxplot(aes(fill = 1, alpha = 0.7)) + 
+  coord_flip() + 
+  geom_jitter(width = 0.1)
+```
+
+y의 분포를 보았는데, 왼쪽으로 쏠려 있음을 확인 가능하고, 아마 정규성이 위배되어 있을 것이다. 하지만 일단 그냥 피팅해보자!
+
+```{r}
+salary.reg <- lm(Salary ~ ., data = data)
+summary(salary.reg) 
+```
+
+적절하게 유의한 변수가 있는거 같기도 하면서 별로인 친구들도 보인다.
+
+```{r}
+par(mfrow = c(2,2))
+plot(salary.reg) # 등분산, 정규성 등등 다 에바인데...?
+par(mfrow = c(1,1))
+```
+
+잔차플롯을 먼저 보면, 선형성도 살짝 위배된거 같고 megaphone shape로 등분산성도 위배된것 같다. 또한 qq 플랏상에서도 많이 벗어나보이므로 정규성도 위배되었다. 여러 테스트들을 확인해보자!
+
+
+#### 테스트들 먼저 해볼까?
+
+```{r, message = F}
+library(car)
+library(gvlma)
+```
+
+```{r}
+gvlma_salary = gvlma(salary.reg )
+gvlma_salary %>% summary
+```
+
+전체적인 회귀, 정규성, 불만족. 등분산성은 만족하는데 plot상으로는 맘에 안듬
+
+#### 정규성검정
+
+```{r}
+car::qqPlot(salary.reg,id.method="identify",simulate=TRUE,main="Q-Q_ plot")
+```
+
+이 함수를 사용할 경우, Confidence interval도 반환하기 때문에 좀더 시각적인 도움을 준다.
+
+```{r}
+shapiro.test(salary.reg$residuals)
+tseries::jarque.bera.test(salary.reg$residuals)
+nortest::ad.test(salary.reg$residuals)
+```
+
+세 테스트 다 귀무가설을 기각하므로, 정규성이 위배되었다.
+
+#### 등분산성 검정
+
+```{r}
+lmtest::bptest(salary.reg)
+car::ncvTest(salary.reg)
+```
+
+등분산 가정 기각!
+
+#  독립성검정
+
+```{r}
+lmtest::dwtest(salary.reg)
+car::durbinWatsonTest(salary.reg)
+```
+
+왜 기각일까? 개별 관측치는 NBA 선수들. 따라서 같은 팀에 있거나 하는 경우 상관성이 나타날 수 있고하니...
+하지만 엄청나게 심각한 위반이 일어나는것 같지 않으니, 나중에 다시 보자!
+
+여기서 두 값이 다르게 나오는 이유는 car패키지는 붓스트랩으로 검정하기 때문이다.
+
+### 정규성 처방
+
+```{r}
+car::powerTransform(data$Salary) %>% summary # 0.22제곱을 salary에 해주면 된다!
+data$Salary <- data$Salary^(0.22)
+```
+
+박스 콕스!
+
+```{r}
+ggplot(data, aes(x = 1, y = Salary)) + 
+  geom_boxplot(aes(fill = 1, alpha = 0.7)) + 
+  coord_flip() + 
+  geom_jitter(width = 0.1)
+```
+
+```{r}
+salary.reg <- lm(Salary ~ ., data = data)
+par(mfrow = c(2,2))
+plot(salary.reg) 
+par(mfrow = c(1,1))
+```
+
+정규성 이외에도 많이 나아진 것을 확인 가능!!
+
+```{r}
+car::qqPlot(salary.reg,id.method="identify",simulate=TRUE,main="Q-Q_ plot")
+```
+
+이제 테스트로 확인해보자
+
+```{r}
+shapiro.test(salary.reg$residuals)
+tseries::jarque.bera.test(salary.reg$residuals)
+nortest::ad.test(salary.reg$residuals)
+```
+
+**정규성 해결!!**
+
+
+### 등분산성
+
+```{r}
+plot(salary.reg, which = 1) 
+```
+
+분산이 점점 감소하는거 같기도 한데, 그냥 관측치가 적어서 그런걸 수도! 테스트를 해보자!
+
+```{r}
+car::ncvTest(salary.reg)
+```
+
+**등분산 해결!!**
+
+
+### 독립성
+
+```{r}
+car::durbinWatsonTest(salary.reg)
+```
+
+아까는 독립성이 깨졌었는데, 변환해주면서 더 우리의 모델이 설명을 잘해낸건지, 독립성도 괜찮다.
+
+
+### 모델의 선형성
+
+이제 오차 가정을 만족했으니, 선형성을 확인해 underfitting을 해결해보자
+
+```{r}
+salary.reg %>% summary  ## adj R^2  = 0.5512
+crPlots(salary.reg)
+```
+
+선형성 같은 경우 Age와 G에 대한 이차항을 넣어주면 좋을것 같음!
+
+```{r}
+salary.reg2 <- lm(Salary ~ . + I(Age^2) + I(G^2), data = data)
+summary(salary.reg2)  ### adj R^2 = 0.5893
+crPlots(salary.reg2)
+```
+
+확실히 선형관계를 더 잘 잡아내고 있고, 그에따라 adj R^2값도 상승했다!!!
+
+최종 잔차플롯을 그려볼까?
+
+```{r}
+par(mfrow = c(2,2))
+plot(salary.reg2)
+par(mfrow = c(1,1))
+```
+
+scale location은 맘에 안들지만....나름 괜찮다!
+
+```{r}
+gvlma(salary.reg2)
+```
+
+전체 검정도 만족한다!!!
+

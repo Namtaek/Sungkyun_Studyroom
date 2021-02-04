@@ -1,0 +1,169 @@
+---
+title: "Week 7 R example"
+output: html_document
+---
+
+6회차에서 썻던 데이터 가져와서 하자!
+
+```{r}
+library(data.table)
+library(tidyverse)
+
+data = fread('2017-18_NBA_salary.csv')
+```
+
+데이터 확인
+
+```{r}
+data %>% dim
+data %>% glimpse
+```
+
+기본적인 전처리. 변수는 다중공선성의 발생을 위해 많이 가져온다. 또한 관련있는 변수들도 다 가져온다.
+
+```{r}
+data <- data[complete.cases(data), ] # 결측치 제거
+data <- data[-c(223:224), ] #겹치는 선수 삭제
+data$Player <- NULL  
+data$Tm <- NULL
+data$NBA_Country <- NULL
+data$Salary = data$Salary^0.22
+
+data = data %>% select('Salary', 'NBA_DraftNumber', 'Age', 'MP', 'PER', 
+                       `TS%`, `DRB%`, VORP, G, OBPM, DBPM, BPM, OWS, DWS, WS, `AST%`, `STL%`)
+data %>% dim
+```
+
+```{r}
+salary.reg <- lm(Salary ~ ., data = data)
+summary(salary.reg)
+```
+
+다중공선성이 상당히 의심되기 때문에, 상관계수 플랏을 통해 확인해보자.
+
+```{r}
+#상관계수 플랏
+library(ggcorrplot)
+corr <- cor(data) # 상관계수 행렬
+p_mat <- cor_pmat(data) # 상관계수 p-value 행렬
+ggcorrplot(corr, hc.order = T, type = "lower", 
+           outline.color = "white", ggtheme = ggplot2::theme_gray(), 
+           colors = c("#6D9EC1", "white", "#E46726"), lab = T, p.mat = p_mat,
+           insig = "blank", lab_size = 2, tl.cex = 7)
+```
+
+변수들이 매우 다중공선성이 심각해보인다.
+
+## 1. 변수 선택법
+
+변수선택법을 통해 최적의 회귀식을 찾아보자
+
+### Best Subset Selection
+
+```{r}
+library(leaps)
+best_subset = regsubsets(Salary ~ ., data = data, nvmax = 13)
+bs = best_subset %>% summary
+bs
+
+par(mfrow = c(2, 2))
+plot(bs$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
+plot(bs$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
+l = which.max(bs$adjr2)
+points(l, bs$adjr2[l], col = "red", cex = 2, pch = 20)
+plot(bs$cp, xlab = "Number of Variables", ylab = "Cp", type = 'l')
+l = which.min(bs$cp)
+points(l, bs$cp[l], col = "red", cex = 2, pch = 20)
+plot(bs$bic, xlab = "Number of Variables", ylab = "BIC", type = 'l')
+l = which.min(bs$bic)
+points(l, bs$bic[l], col = "red", cex = 2, pch = 20)
+par(mfrow = c(1, 1))
+```
+
+변수가 이렇게 기준이 다르다. 그러면 그냥 변수 적은게 좋다고 생각한다!
+
+```{r}
+coef(best_subset, 5)
+
+best_lm_fit = lm(Salary ~ NBA_DraftNumber + Age + MP + `DRB%` + G, data = data)
+summary(best_lm_fit)
+```
+
+### Forward Selection
+
+```{r}
+forward_selection = regsubsets(Salary ~ ., data = data, nvmax = 13, method = "forward")
+summary(forward_selection)
+
+fs = summary(forward_selection)
+plot(fs$bic, xlab = "Number of Variables", ylab = "BIC", type = 'l')
+l = which.min(fs$bic)
+points(l, fs$bic[l], col = "red", cex = 2, pch = 20)
+
+coef(forward_selection, 5)
+```
+
+### Backward Elimination
+
+```{r}
+backward_selection = regsubsets(Salary ~ ., data = data, nvmax = 13, method = "forward")
+summary(backward_selection)
+
+coef(backward_selection, 5)
+```
+
+세 결과가 동일하지 않은 것을 확인할 수 있다. 결국에 경로가 있는 방법들은 최적의 회귀식을 언제나 찾아낼 수는 없다.
+
+
+## 2. ridge regression
+
+원래는 최적의 람다를 선택하는 과정이 들어가야하지만, 이를 위해서는 CV(Cross Validation)에 대한 이해가 필요하기 때문에, 람다 값이 변함에 따라 생기는 변화를 보려 한다.
+
+```{r}
+library(glmnet)
+# if alpha=0 -> ridge; if alpha=1 -> lasso.
+# Default: standardize = TRUE
+```
+
+ridge 가봅시다. 데이터를 x와 y를 나눠서 넣어줘야 하기 때문에 형태를 맞춰줍시다.
+
+```{r}
+data_x = model.matrix(Salary ~ ., data = data)[,-1]
+data_y = data$Salary
+```
+
+
+```{r}
+lm_fit1 = lm(Salary ~ ., data = data)
+lm_fit1$coefficients
+ridge_fit1 = glmnet(x = data_x, y = data_y, alpha = 0, lambda = 0)
+ridge_fit1$beta
+```
+
+람다 = 0이면 두 결과가 동일한 것을 확인할 수 있다.
+
+```{r}
+ridge_fit2 = glmnet(x = data_x, y = data_y, alpha = 0, lambda = 1)
+ridge_fit3 = glmnet(x = data_x, y = data_y, alpha = 0, lambda = 10)
+ridge_fit4 = glmnet(x = data_x, y = data_y, alpha = 0, lambda = 1000)
+ridge_fit5 = glmnet(x = data_x, y = data_y, alpha = 0, lambda = 10^7)
+
+cbind(ridge_fit1$beta, ridge_fit2$beta, ridge_fit3$beta, ridge_fit4$beta, ridge_fit5$beta)
+```
+
+점점 람다가 커짐에 따라, 각각의 회귀계수가 점점 작아지는 것을 확인할 수 있고, 그렇다고 해서 정확하게 0을 찍는 베타가 존재하진 않는다.
+
+
+## 3. Lasso regression    
+
+```{r}
+lasso_fit1 = glmnet(x = data_x, y = data_y, alpha = 1, lambda = 0.001)
+lasso_fit2 = glmnet(x = data_x, y = data_y, alpha = 1, lambda = 0.01)
+lasso_fit3 = glmnet(x = data_x, y = data_y, alpha = 1, lambda = 0.1)
+lasso_fit4 = glmnet(x = data_x, y = data_y, alpha = 1, lambda = 1)
+lasso_fit5 = glmnet(x = data_x, y = data_y, alpha = 1, lambda = 10)
+
+cbind(lasso_fit1$beta, lasso_fit2$beta, lasso_fit3$beta, lasso_fit4$beta, lasso_fit5$beta)
+```
+
+점점 람다가 커짐에 따라 확실히 0을 찍는 변수들이 존재한다. 변수선택의 효과가 생기는 것.
